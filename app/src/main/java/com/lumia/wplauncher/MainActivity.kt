@@ -1,24 +1,33 @@
 package com.lumia.wplauncher
 
+import android.Manifest
+import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import android.telephony.TelephonyManager
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -43,12 +52,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -60,11 +72,14 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
+import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
@@ -75,7 +90,7 @@ import java.util.Locale
 import kotlin.math.roundToInt
 
 enum class TileSize(val cols: Int, val rows: Int) { SMALL(1, 1), MEDIUM(2, 2), WIDE(4, 2) }
-enum class TileSpecialType { NONE, PHONE, PEOPLE_LIVE, CALENDAR_LIVE, STORE_BADGE, LAUNCHER_SETTINGS }
+enum class TileSpecialType { NONE, PHONE, PEOPLE_LIVE, CALENDAR_LIVE, STORE_BADGE, LAUNCHER_SETTINGS, GALLERY_LIVE }
 
 data class TileItem(
     val id: String,
@@ -153,8 +168,8 @@ object Storage {
         TileItem("mail", "Почта", TileSize.SMALL, iconName = "email"),
         TileItem("store", "Маркет", TileSize.SMALL, specialType = TileSpecialType.STORE_BADGE, iconName = "shopping_bag", badgeCount = 16),
         TileItem("contacts", "Контакты", TileSize.MEDIUM, specialType = TileSpecialType.PEOPLE_LIVE, iconName = "people"),
-        TileItem("office", "Office", TileSize.MEDIUM, iconName = "description"),
-        TileItem("calendar", "Календарь", TileSize.WIDE, specialType = TileSpecialType.CALENDAR_LIVE, iconName = "event"),
+        TileItem("calendar", "Календарь", TileSize.MEDIUM, specialType = TileSpecialType.CALENDAR_LIVE, iconName = "event"),
+        TileItem("gallery", "Галерея", TileSize.MEDIUM, specialType = TileSpecialType.GALLERY_LIVE, iconName = "photo_library"),
         TileItem("camera", "Камера", TileSize.MEDIUM, iconName = "photo_camera"),
         TileItem("settings", "Настройки", TileSize.MEDIUM, specialType = TileSpecialType.LAUNCHER_SETTINGS, iconName = "settings")
     )
@@ -163,6 +178,10 @@ object Storage {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes.layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
         hideSystemStatusBar()
         setContent { WpApp() }
     }
@@ -199,8 +218,26 @@ fun WpApp() {
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
     var editingTileId by remember { mutableStateOf<String?>(null) }
     var showSettingsScreen by remember { mutableStateOf(false) }
+    var galleryPhotos by remember { mutableStateOf<List<ImageBitmap>>(emptyList()) }
+
+    val mediaPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    var hasMediaPerm by remember {
+        mutableStateOf(ContextCompat.checkSelfPermission(ctx, mediaPerm) == PackageManager.PERMISSION_GRANTED)
+    }
+
+    val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        hasMediaPerm = granted
+    }
 
     LaunchedEffect(Unit) {
+        if (!hasMediaPerm) {
+            permLauncher.launch(mediaPerm)
+        }
         val pm = ctx.packageManager
         val i = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
         apps = pm.queryIntentActivities(i, 0)
@@ -208,6 +245,12 @@ fun WpApp() {
             .map { AppEntry(it.loadLabel(pm).toString(), it.activityInfo.packageName, try { it.loadIcon(pm) } catch (e: Exception) { null }) }
             .distinctBy { it.packageName }
             .sortedBy { it.label.lowercase() }
+    }
+
+    LaunchedEffect(hasMediaPerm) {
+        if (hasMediaPerm) {
+            galleryPhotos = loadRecentPhotos(ctx, 10)
+        }
     }
 
     BackHandler(enabled = showSettingsScreen || editingTileId != null || pager.currentPage != 0) {
@@ -224,7 +267,7 @@ fun WpApp() {
             .background(bgColor)
             .navigationBarsPadding()
     ) {
-        // Custom Windows Phone 8 Status Bar
+        // Custom Windows Phone 8 Status Bar flush with top cutout
         WpStatusBar(fgColor = fgColor, accentColor = accent)
 
         if (showSettingsScreen) {
@@ -270,6 +313,7 @@ fun WpApp() {
                         gridCols = gridCols,
                         accent = accent,
                         fgColor = fgColor,
+                        galleryPhotos = galleryPhotos,
                         editingTileId = editingTileId,
                         onSelectEditTile = { editingTileId = it },
                         onExitEditMode = { editingTileId = null },
@@ -298,8 +342,14 @@ fun WpApp() {
                             if (editingTileId == id) editingTileId = null
                         },
                         onClick = { t ->
-                            if (t.specialType == TileSpecialType.LAUNCHER_SETTINGS) showSettingsScreen = true
-                            else launchTile(ctx, t)
+                            if (t.specialType == TileSpecialType.LAUNCHER_SETTINGS) {
+                                showSettingsScreen = true
+                            } else {
+                                if (isGalleryTile(t) && !hasMediaPerm) {
+                                    permLauncher.launch(mediaPerm)
+                                }
+                                launchTile(ctx, t)
+                            }
                         },
                         onAllApps = { scope.launch { pager.animateScrollToPage(1) } }
                     )
@@ -311,7 +361,17 @@ fun WpApp() {
                         fgColor = fgColor,
                         onClick = { app -> ctx.packageManager.getLaunchIntentForPackage(app.packageName)?.let { ctx.startActivity(it) } },
                         onPin = { app ->
-                            val updated = tiles + TileItem("app_${System.currentTimeMillis()}", app.label, TileSize.MEDIUM, app.packageName)
+                            val isGal = app.packageName.contains("gallery", true) ||
+                                app.packageName.contains("photos", true) ||
+                                app.label.contains("галерея", true) ||
+                                app.label.contains("фото", true)
+                            val updated = tiles + TileItem(
+                                id = "app_${System.currentTimeMillis()}",
+                                title = app.label,
+                                size = TileSize.MEDIUM,
+                                packageName = app.packageName,
+                                specialType = if (isGal) TileSpecialType.GALLERY_LIVE else TileSpecialType.NONE
+                            )
                             tiles = updated
                             Storage.saveTiles(ctx, updated)
                             scope.launch { pager.animateScrollToPage(0) }
@@ -322,6 +382,50 @@ fun WpApp() {
             }
         }
     }
+}
+
+fun isGalleryTile(t: TileItem): Boolean {
+    if (t.specialType == TileSpecialType.GALLERY_LIVE) return true
+    val pkg = t.packageName ?: ""
+    return pkg.contains("gallery", true) ||
+        pkg.contains("photos", true) ||
+        t.title.contains("галерея", true) ||
+        t.title.contains("фото", true)
+}
+
+suspend fun loadRecentPhotos(ctx: Context, limit: Int): List<ImageBitmap> = withContext(Dispatchers.IO) {
+    val result = mutableListOf<ImageBitmap>()
+    val projection = arrayOf(MediaStore.Images.Media._ID)
+    val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
+    try {
+        ctx.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+            null,
+            sortOrder
+        )?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            while (cursor.moveToNext() && result.size < limit) {
+                val id = cursor.getLong(idCol)
+                val contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                val bmp: Bitmap? = try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        ctx.contentResolver.loadThumbnail(contentUri, android.util.Size(360, 360), null)
+                    } else {
+                        ctx.contentResolver.openInputStream(contentUri)?.use { stream ->
+                            val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+                            BitmapFactory.decodeStream(stream, null, opts)
+                        }
+                    }
+                } catch (_: Exception) { null }
+                if (bmp != null) {
+                    result.add(bmp.asImageBitmap())
+                }
+            }
+        }
+    } catch (_: Exception) {}
+    result
 }
 
 @Composable
@@ -364,12 +468,11 @@ fun WpStatusBar(fgColor: Color, accentColor: Color) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(26.dp)
-            .padding(horizontal = 12.dp),
+            .height(28.dp)
+            .padding(horizontal = 12.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
-        // Left: WP8 Signal Bars + Operator + Wi-Fi
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.5.dp)) {
                 listOf(4.dp, 6.dp, 8.dp, 10.dp, 12.dp).forEachIndexed { idx, h ->
@@ -401,7 +504,6 @@ fun WpStatusBar(fgColor: Color, accentColor: Color) {
             }
         }
 
-        // Right: WP8 Battery Icon + Percentage + Clock
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -480,6 +582,7 @@ fun StartScreen(
     gridCols: Int,
     accent: Color,
     fgColor: Color,
+    galleryPhotos: List<ImageBitmap>,
     editingTileId: String?,
     onSelectEditTile: (String) -> Unit,
     onExitEditMode: () -> Unit,
@@ -616,11 +719,17 @@ fun StartScreen(
                             }
                         )
                 ) {
-                    // Tile Interior
-                    when (p.tile.specialType) {
-                        TileSpecialType.PEOPLE_LIVE -> PeopleTile(p.tile.title, accent)
-                        TileSpecialType.CALENDAR_LIVE -> CalendarTile(p.tile.title)
-                        TileSpecialType.PHONE -> {
+                    when {
+                        p.tile.specialType == TileSpecialType.PEOPLE_LIVE -> PeopleTile(p.tile.title, accent)
+                        p.tile.specialType == TileSpecialType.CALENDAR_LIVE -> CalendarTile(p.tile.title)
+                        isGalleryTile(p.tile) && galleryPhotos.isNotEmpty() -> {
+                            GalleryLiveTile(
+                                title = p.tile.title,
+                                photos = galleryPhotos,
+                                showTitle = p.tile.size != TileSize.SMALL
+                            )
+                        }
+                        p.tile.specialType == TileSpecialType.PHONE -> {
                             val op = remember {
                                 try {
                                     (ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager)
@@ -634,7 +743,7 @@ fun StartScreen(
                                 }
                             }
                         }
-                        TileSpecialType.STORE_BADGE -> {
+                        p.tile.specialType == TileSpecialType.STORE_BADGE -> {
                             Row(Modifier.align(Alignment.Center), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.ShoppingBag, null, tint = Color.White, modifier = Modifier.size(26.dp))
                                 Spacer(Modifier.width(4.dp))
@@ -661,7 +770,6 @@ fun StartScreen(
                         }
                     }
 
-                    // WP8 Corner Edit Handles (Unpin top-right, Resize bottom-right)
                     if (isEditingThis) {
                         Box(
                             modifier = Modifier
@@ -729,6 +837,57 @@ fun StartScreen(
 }
 
 @Composable
+fun GalleryLiveTile(title: String, photos: List<ImageBitmap>, showTitle: Boolean) {
+    var index by remember(photos.size) { mutableIntStateOf(0) }
+    LaunchedEffect(photos.size) {
+        if (photos.size > 1) {
+            while (true) {
+                delay(4200)
+                index = (index + 1) % photos.size
+            }
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Crossfade(
+            targetState = photos[index % photos.size],
+            animationSpec = tween(durationMillis = 900),
+            label = "galleryCrossfade"
+        ) { currentPhoto ->
+            Image(
+                bitmap = currentPhoto,
+                contentDescription = title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        if (showTitle) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .align(Alignment.BottomCenter)
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.65f))
+                        )
+                    )
+            )
+            Text(
+                text = title,
+                color = Color.White,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(10.dp)
+            )
+        }
+    }
+}
+
+@Composable
 fun WpSettingsScreen(
     bgColor: Color,
     fgColor: Color,
@@ -766,7 +925,6 @@ fun WpSettingsScreen(
             modifier = Modifier.padding(bottom = 20.dp)
         )
 
-        // Background Theme
         Text("Фон", color = fgColor.copy(alpha = 0.65f), fontSize = 14.sp, modifier = Modifier.padding(bottom = 6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 22.dp)) {
             listOf(true to "Тёмный", false to "Светлый").forEach { (darkVal, label) ->
@@ -785,7 +943,6 @@ fun WpSettingsScreen(
             }
         }
 
-        // Accent Color Palette
         Text("Цвет элементов", color = fgColor.copy(alpha = 0.65f), fontSize = 14.sp, modifier = Modifier.padding(bottom = 8.dp))
         WP_ACCENTS.chunked(4).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(bottom = 10.dp)) {
@@ -805,7 +962,6 @@ fun WpSettingsScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        // Grid Columns (4 vs 6)
         Text("Сетка рабочего стола", color = fgColor.copy(alpha = 0.65f), fontSize = 14.sp, modifier = Modifier.padding(bottom = 6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 24.dp)) {
             listOf(4 to "4 колонки (Классика)", 6 to "6 колонок (Lumia 1520)").forEach { (colsVal, label) ->
@@ -957,6 +1113,7 @@ fun launchTile(ctx: Context, tile: TileItem) {
         "mail" -> Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_EMAIL) }
         "store" -> Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=apps"))
         "contacts" -> Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+        "gallery" -> Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
         "office" -> Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }
         "calendar" -> Intent(Intent.ACTION_VIEW, CalendarContract.CONTENT_URI.buildUpon().appendPath("time").build())
         "camera" -> Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
@@ -973,6 +1130,7 @@ fun iconFor(name: String): ImageVector = when (name) {
     "email" -> Icons.Default.Email
     "shopping_bag" -> Icons.Default.ShoppingBag
     "people" -> Icons.Default.People
+    "photo_library" -> Icons.Default.PhotoLibrary
     "description" -> Icons.Default.Description
     "event" -> Icons.Default.Event
     "photo_camera" -> Icons.Default.PhotoCamera
