@@ -267,7 +267,6 @@ fun WpApp() {
             .background(bgColor)
             .navigationBarsPadding()
     ) {
-        // Custom Windows Phone 8 Status Bar flush with top cutout
         WpStatusBar(fgColor = fgColor, accentColor = accent)
 
         if (showSettingsScreen) {
@@ -469,7 +468,7 @@ fun WpStatusBar(fgColor: Color, accentColor: Color) {
         modifier = Modifier
             .fillMaxWidth()
             .height(28.dp)
-            .padding(horizontal = 12.dp, vertical = 2.dp),
+            .padding(horizontal = 8.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -596,8 +595,10 @@ fun StartScreen(
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
 
-    val gridW = LocalConfiguration.current.screenWidthDp.dp - 44.dp
-    val gap = if (gridCols == 6) 5.dp else 7.dp
+    // Symmetrical ultra-thin side margins (8.dp left & 8.dp right) to showcase S25 Ultra thin bezels
+    val sideMargin = 8.dp
+    val gridW = LocalConfiguration.current.screenWidthDp.dp - sideMargin * 2
+    val gap = if (gridCols == 6) 4.5.dp else 6.dp
     val cell = (gridW - gap * (gridCols - 1)) / gridCols
 
     val (placed, rows) = remember(tiles, gridCols) { placeTiles(tiles, gridCols) }
@@ -617,7 +618,8 @@ fun StartScreen(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             ) { onExitEditMode() }
             .verticalScroll(rememberScrollState(), enabled = draggingId == null)
-            .padding(start = 12.dp, top = 6.dp, bottom = 32.dp)
+            .padding(horizontal = sideMargin, vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Box(
             modifier = Modifier
@@ -801,7 +803,7 @@ fun StartScreen(
             }
         }
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
 
         if (editingTileId != null) {
             Row(
@@ -833,6 +835,7 @@ fun StartScreen(
                 }
             }
         }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
@@ -1106,6 +1109,25 @@ fun launchTile(ctx: Context, tile: TileItem) {
     if (!tile.packageName.isNullOrBlank()) {
         ctx.packageManager.getLaunchIntentForPackage(tile.packageName)?.let { ctx.startActivity(it); return }
     }
+    if (isGalleryTile(tile)) {
+        val galleryPkgs = listOf("com.sec.android.gallery3d", "com.google.android.apps.photos")
+        for (pkg in galleryPkgs) {
+            ctx.packageManager.getLaunchIntentForPackage(pkg)?.let {
+                it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                ctx.startActivity(it)
+                return
+            }
+        }
+        try {
+            val catIntent = Intent(Intent.ACTION_MAIN).apply {
+                addCategory(Intent.CATEGORY_APP_GALLERY)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            ctx.startActivity(catIntent)
+            return
+        } catch (_: Exception) {}
+    }
+
     val i = when (tile.id) {
         "phone" -> Intent(Intent.ACTION_DIAL)
         "messages" -> Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) }
@@ -1113,7 +1135,6 @@ fun launchTile(ctx: Context, tile: TileItem) {
         "mail" -> Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_EMAIL) }
         "store" -> Intent(Intent.ACTION_VIEW, Uri.parse("market://search?q=apps"))
         "contacts" -> Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
-        "gallery" -> Intent(Intent.ACTION_VIEW, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
         "office" -> Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }
         "calendar" -> Intent(Intent.ACTION_VIEW, CalendarContract.CONTENT_URI.buildUpon().appendPath("time").build())
         "camera" -> Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
