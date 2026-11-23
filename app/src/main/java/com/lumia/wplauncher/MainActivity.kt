@@ -1,18 +1,15 @@
 package com.lumia.wplauncher
 
 import android.Manifest
+import android.app.Activity
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.net.Uri
-import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.CalendarContract
@@ -59,6 +56,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -67,6 +65,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -76,8 +75,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -85,8 +82,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle as JavaTextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -184,20 +179,8 @@ class MainActivity : ComponentActivity() {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        hideSystemStatusBar()
-        setContent { WpApp() }
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemStatusBar()
-    }
-
-    private fun hideSystemStatusBar() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.hide(WindowInsetsCompat.Type.statusBars())
-        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        setContent { WpApp() }
     }
 }
 
@@ -205,6 +188,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun WpApp() {
     val ctx = LocalContext.current
+    val view = LocalView.current
     val scope = rememberCoroutineScope()
     val pager = rememberPagerState(pageCount = { 2 })
 
@@ -215,6 +199,18 @@ fun WpApp() {
     val accent = Color(accentHex)
     val bgColor = if (isDark) Color.Black else Color.White
     val fgColor = if (isDark) Color.White else Color.Black
+
+    // Sync native Android status & navigation bars seamlessly with the launcher theme
+    SideEffect {
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        @Suppress("DEPRECATION")
+        window.statusBarColor = bgColor.toArgb()
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = bgColor.toArgb()
+        val insetsController = WindowCompat.getInsetsController(window, view)
+        insetsController.isAppearanceLightStatusBars = !isDark
+        insetsController.isAppearanceLightNavigationBars = !isDark
+    }
 
     var tiles by remember { mutableStateOf(Storage.loadTiles(ctx)) }
     var apps by remember { mutableStateOf<List<AppEntry>>(emptyList()) }
@@ -263,135 +259,123 @@ fun WpApp() {
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(bgColor)
+            .statusBarsPadding()
             .navigationBarsPadding()
+            .clipToBounds()
     ) {
-        // Fixed top WP8 status bar that never scrolls or shifts off-screen
-        WpStatusBar(
-            fgColor = fgColor,
-            accentColor = accent,
-            bgColor = bgColor
-        )
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .clipToBounds()
-        ) {
-            if (showSettingsScreen) {
-                WpSettingsScreen(
-                    bgColor = bgColor,
-                    fgColor = fgColor,
-                    accentColor = accent,
-                    currentAccent = accentHex,
-                    isDark = isDark,
-                    gridCols = gridCols,
-                    onToggleTheme = { dark ->
-                        isDark = dark
-                        Storage.saveDarkTheme(ctx, dark)
-                    },
-                    onSelectAccent = { hex ->
-                        accentHex = hex
-                        Storage.saveAccent(ctx, hex)
-                    },
-                    onSelectCols = { cols ->
-                        gridCols = cols
-                        Storage.saveGridColumns(ctx, cols)
-                    },
-                    onSetDefaultHome = {
-                        ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
-                    },
-                    onResetTiles = {
-                        val d = Storage.defaultTiles()
-                        tiles = d
-                        Storage.saveTiles(ctx, d)
-                        editingTileId = null
-                        showSettingsScreen = false
-                    },
-                    onClose = { showSettingsScreen = false }
-                )
-            } else {
-                HorizontalPager(
-                    state = pager,
-                    userScrollEnabled = editingTileId == null,
-                    modifier = Modifier.fillMaxSize()
-                ) { page ->
-                    if (page == 0) {
-                        StartScreen(
-                            tiles = tiles,
-                            gridCols = gridCols,
-                            accent = accent,
-                            fgColor = fgColor,
-                            galleryPhotos = galleryPhotos,
-                            editingTileId = editingTileId,
-                            onSelectEditTile = { editingTileId = it },
-                            onExitEditMode = { editingTileId = null },
-                            onReorderTiles = { newList ->
-                                tiles = newList
-                                Storage.saveTiles(ctx, newList)
-                            },
-                            onCycleSize = { id ->
-                                val updated = tiles.map { t ->
-                                    if (t.id == id) {
-                                        val next = when (t.size) {
-                                            TileSize.SMALL -> TileSize.MEDIUM
-                                            TileSize.MEDIUM -> TileSize.WIDE
-                                            TileSize.WIDE -> TileSize.SMALL
-                                        }
-                                        t.copy(size = next)
-                                    } else t
-                                }
-                                tiles = updated
-                                Storage.saveTiles(ctx, updated)
-                            },
-                            onUnpin = { id ->
-                                val updated = tiles.filterNot { it.id == id }
-                                tiles = updated
-                                Storage.saveTiles(ctx, updated)
-                                if (editingTileId == id) editingTileId = null
-                            },
-                            onClick = { t ->
-                                if (t.specialType == TileSpecialType.LAUNCHER_SETTINGS) {
-                                    showSettingsScreen = true
-                                } else {
-                                    if (isGalleryTile(t) && !hasMediaPerm) {
-                                        permLauncher.launch(mediaPerm)
+        if (showSettingsScreen) {
+            WpSettingsScreen(
+                bgColor = bgColor,
+                fgColor = fgColor,
+                accentColor = accent,
+                currentAccent = accentHex,
+                isDark = isDark,
+                gridCols = gridCols,
+                onToggleTheme = { dark ->
+                    isDark = dark
+                    Storage.saveDarkTheme(ctx, dark)
+                },
+                onSelectAccent = { hex ->
+                    accentHex = hex
+                    Storage.saveAccent(ctx, hex)
+                },
+                onSelectCols = { cols ->
+                    gridCols = cols
+                    Storage.saveGridColumns(ctx, cols)
+                },
+                onSetDefaultHome = {
+                    ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+                },
+                onResetTiles = {
+                    val d = Storage.defaultTiles()
+                    tiles = d
+                    Storage.saveTiles(ctx, d)
+                    editingTileId = null
+                    showSettingsScreen = false
+                },
+                onClose = { showSettingsScreen = false }
+            )
+        } else {
+            HorizontalPager(
+                state = pager,
+                userScrollEnabled = editingTileId == null,
+                modifier = Modifier.fillMaxSize()
+            ) { page ->
+                if (page == 0) {
+                    StartScreen(
+                        tiles = tiles,
+                        gridCols = gridCols,
+                        accent = accent,
+                        fgColor = fgColor,
+                        galleryPhotos = galleryPhotos,
+                        editingTileId = editingTileId,
+                        onSelectEditTile = { editingTileId = it },
+                        onExitEditMode = { editingTileId = null },
+                        onReorderTiles = { newList ->
+                            tiles = newList
+                            Storage.saveTiles(ctx, newList)
+                        },
+                        onCycleSize = { id ->
+                            val updated = tiles.map { t ->
+                                if (t.id == id) {
+                                    val next = when (t.size) {
+                                        TileSize.SMALL -> TileSize.MEDIUM
+                                        TileSize.MEDIUM -> TileSize.WIDE
+                                        TileSize.WIDE -> TileSize.SMALL
                                     }
-                                    launchTile(ctx, t)
+                                    t.copy(size = next)
+                                } else t
+                            }
+                            tiles = updated
+                            Storage.saveTiles(ctx, updated)
+                        },
+                        onUnpin = { id ->
+                            val updated = tiles.filterNot { it.id == id }
+                            tiles = updated
+                            Storage.saveTiles(ctx, updated)
+                            if (editingTileId == id) editingTileId = null
+                        },
+                        onClick = { t ->
+                            if (t.specialType == TileSpecialType.LAUNCHER_SETTINGS) {
+                                showSettingsScreen = true
+                            } else {
+                                if (isGalleryTile(t) && !hasMediaPerm) {
+                                    permLauncher.launch(mediaPerm)
                                 }
-                            },
-                            onAllApps = { scope.launch { pager.animateScrollToPage(1) } }
-                        )
-                    } else {
-                        AllAppsScreen(
-                            apps = apps,
-                            accent = accent,
-                            bgColor = bgColor,
-                            fgColor = fgColor,
-                            onClick = { app -> ctx.packageManager.getLaunchIntentForPackage(app.packageName)?.let { ctx.startActivity(it) } },
-                            onPin = { app ->
-                                val isGal = app.packageName.contains("gallery", true) ||
-                                    app.packageName.contains("photos", true) ||
-                                    app.label.contains("галерея", true) ||
-                                    app.label.contains("фото", true)
-                                val updated = tiles + TileItem(
-                                    id = "app_${System.currentTimeMillis()}",
-                                    title = app.label,
-                                    size = TileSize.MEDIUM,
-                                    packageName = app.packageName,
-                                    specialType = if (isGal) TileSpecialType.GALLERY_LIVE else TileSpecialType.NONE
-                                )
-                                tiles = updated
-                                Storage.saveTiles(ctx, updated)
-                                scope.launch { pager.animateScrollToPage(0) }
-                            },
-                            onSettings = { showSettingsScreen = true }
-                        )
-                    }
+                                launchTile(ctx, t)
+                            }
+                        },
+                        onAllApps = { scope.launch { pager.animateScrollToPage(1) } }
+                    )
+                } else {
+                    AllAppsScreen(
+                        apps = apps,
+                        accent = accent,
+                        bgColor = bgColor,
+                        fgColor = fgColor,
+                        onClick = { app -> ctx.packageManager.getLaunchIntentForPackage(app.packageName)?.let { ctx.startActivity(it) } },
+                        onPin = { app ->
+                            val isGal = app.packageName.contains("gallery", true) ||
+                                app.packageName.contains("photos", true) ||
+                                app.label.contains("галерея", true) ||
+                                app.label.contains("фото", true)
+                            val updated = tiles + TileItem(
+                                id = "app_${System.currentTimeMillis()}",
+                                title = app.label,
+                                size = TileSize.MEDIUM,
+                                packageName = app.packageName,
+                                specialType = if (isGal) TileSpecialType.GALLERY_LIVE else TileSpecialType.NONE
+                            )
+                            tiles = updated
+                            Storage.saveTiles(ctx, updated)
+                            scope.launch { pager.animateScrollToPage(0) }
+                        },
+                        onSettings = { showSettingsScreen = true }
+                    )
                 }
             }
         }
@@ -440,126 +424,6 @@ suspend fun loadRecentPhotos(ctx: Context, limit: Int): List<ImageBitmap> = with
         }
     } catch (_: Exception) {}
     result
-}
-
-@Composable
-fun WpStatusBar(fgColor: Color, accentColor: Color, bgColor: Color) {
-    val ctx = LocalContext.current
-    var timeText by remember { mutableStateOf("") }
-    var batteryPct by remember { mutableIntStateOf(100) }
-    var isCharging by remember { mutableStateOf(false) }
-    var hasWifi by remember { mutableStateOf(false) }
-    var operatorName by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        val fmt = DateTimeFormatter.ofPattern("HH:mm")
-        while (true) {
-            timeText = LocalTime.now().format(fmt)
-            try {
-                val batIntent = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-                val level = batIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-                val scale = batIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-                val status = batIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-                if (level >= 0 && scale > 0) batteryPct = (level * 100) / scale
-                isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
-            } catch (_: Exception) {}
-
-            try {
-                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-                val caps = cm?.getNetworkCapabilities(cm.activeNetwork)
-                hasWifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
-            } catch (_: Exception) {}
-
-            try {
-                val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-                operatorName = tm?.networkOperatorName?.takeIf { it.isNotBlank() } ?: ""
-            } catch (_: Exception) {}
-
-            delay(5000)
-        }
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(bgColor)
-            .height(28.dp)
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(1.5.dp)) {
-                listOf(4.dp, 6.dp, 8.dp, 10.dp, 12.dp).forEachIndexed { idx, h ->
-                    val active = operatorName.isNotEmpty() || idx < 3
-                    Box(
-                        Modifier
-                            .width(2.5.dp)
-                            .height(h)
-                            .background(if (active) fgColor else fgColor.copy(alpha = 0.25f))
-                    )
-                }
-            }
-            if (operatorName.isNotEmpty()) {
-                Text(
-                    text = operatorName,
-                    color = fgColor,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1
-                )
-            }
-            if (hasWifi) {
-                Icon(
-                    imageVector = Icons.Default.Wifi,
-                    contentDescription = "Wi-Fi",
-                    tint = fgColor,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .width(20.dp)
-                        .height(10.dp)
-                        .border(1.dp, fgColor)
-                        .padding(1.5.dp)
-                ) {
-                    val fillColor = when {
-                        isCharging -> accentColor
-                        batteryPct <= 20 -> Color(0xFFE51400)
-                        else -> fgColor
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxHeight()
-                            .fillMaxWidth((batteryPct / 100f).coerceIn(0.05f, 1f))
-                            .background(fillColor)
-                    )
-                }
-                Box(
-                    modifier = Modifier
-                        .width(1.5.dp)
-                        .height(5.dp)
-                        .background(fgColor)
-                )
-            }
-            Text(
-                text = "$batteryPct%",
-                color = fgColor.copy(alpha = 0.8f),
-                fontSize = 11.sp
-            )
-            Text(
-                text = timeText,
-                color = fgColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold
-            )
-        }
-    }
 }
 
 data class PlacedTile(val tile: TileItem, val col: Int, val row: Int)
@@ -1138,6 +1002,7 @@ fun AllAppsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(bgColor)
+            .imePadding()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         LazyColumn(
