@@ -1,7 +1,6 @@
 package com.lumia.wplauncher
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
@@ -36,7 +35,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -179,20 +177,6 @@ object Storage {
     )
 }
 
-@SuppressLint("WrongConstant")
-fun expandNotificationShade(ctx: Context) {
-    try {
-        val sbService = ctx.getSystemService("statusbar")
-        val statusBarManager = Class.forName("android.app.StatusBarManager")
-        val expandMethod = statusBarManager.getMethod("expandNotificationsPanel")
-        expandMethod.invoke(sbService)
-    } catch (_: Exception) {
-        try {
-            ctx.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        } catch (_: Exception) {}
-    }
-}
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -285,122 +269,129 @@ fun WpApp() {
             .background(bgColor)
             .navigationBarsPadding()
     ) {
+        // Fixed top WP8 status bar that never scrolls or shifts off-screen
         WpStatusBar(
             fgColor = fgColor,
             accentColor = accent,
-            bgColor = bgColor,
-            onSwipeDown = { expandNotificationShade(ctx) }
+            bgColor = bgColor
         )
 
-        if (showSettingsScreen) {
-            WpSettingsScreen(
-                bgColor = bgColor,
-                fgColor = fgColor,
-                accentColor = accent,
-                currentAccent = accentHex,
-                isDark = isDark,
-                gridCols = gridCols,
-                onToggleTheme = { dark ->
-                    isDark = dark
-                    Storage.saveDarkTheme(ctx, dark)
-                },
-                onSelectAccent = { hex ->
-                    accentHex = hex
-                    Storage.saveAccent(ctx, hex)
-                },
-                onSelectCols = { cols ->
-                    gridCols = cols
-                    Storage.saveGridColumns(ctx, cols)
-                },
-                onSetDefaultHome = {
-                    ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
-                },
-                onResetTiles = {
-                    val d = Storage.defaultTiles()
-                    tiles = d
-                    Storage.saveTiles(ctx, d)
-                    editingTileId = null
-                    showSettingsScreen = false
-                },
-                onClose = { showSettingsScreen = false }
-            )
-        } else {
-            HorizontalPager(
-                state = pager,
-                userScrollEnabled = editingTileId == null,
-                modifier = Modifier.fillMaxSize()
-            ) { page ->
-                if (page == 0) {
-                    StartScreen(
-                        tiles = tiles,
-                        gridCols = gridCols,
-                        accent = accent,
-                        fgColor = fgColor,
-                        galleryPhotos = galleryPhotos,
-                        editingTileId = editingTileId,
-                        onSelectEditTile = { editingTileId = it },
-                        onExitEditMode = { editingTileId = null },
-                        onReorderTiles = { newList ->
-                            tiles = newList
-                            Storage.saveTiles(ctx, newList)
-                        },
-                        onCycleSize = { id ->
-                            val updated = tiles.map { t ->
-                                if (t.id == id) {
-                                    val next = when (t.size) {
-                                        TileSize.SMALL -> TileSize.MEDIUM
-                                        TileSize.MEDIUM -> TileSize.WIDE
-                                        TileSize.WIDE -> TileSize.SMALL
-                                    }
-                                    t.copy(size = next)
-                                } else t
-                            }
-                            tiles = updated
-                            Storage.saveTiles(ctx, updated)
-                        },
-                        onUnpin = { id ->
-                            val updated = tiles.filterNot { it.id == id }
-                            tiles = updated
-                            Storage.saveTiles(ctx, updated)
-                            if (editingTileId == id) editingTileId = null
-                        },
-                        onClick = { t ->
-                            if (t.specialType == TileSpecialType.LAUNCHER_SETTINGS) {
-                                showSettingsScreen = true
-                            } else {
-                                if (isGalleryTile(t) && !hasMediaPerm) {
-                                    permLauncher.launch(mediaPerm)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .clipToBounds()
+        ) {
+            if (showSettingsScreen) {
+                WpSettingsScreen(
+                    bgColor = bgColor,
+                    fgColor = fgColor,
+                    accentColor = accent,
+                    currentAccent = accentHex,
+                    isDark = isDark,
+                    gridCols = gridCols,
+                    onToggleTheme = { dark ->
+                        isDark = dark
+                        Storage.saveDarkTheme(ctx, dark)
+                    },
+                    onSelectAccent = { hex ->
+                        accentHex = hex
+                        Storage.saveAccent(ctx, hex)
+                    },
+                    onSelectCols = { cols ->
+                        gridCols = cols
+                        Storage.saveGridColumns(ctx, cols)
+                    },
+                    onSetDefaultHome = {
+                        ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+                    },
+                    onResetTiles = {
+                        val d = Storage.defaultTiles()
+                        tiles = d
+                        Storage.saveTiles(ctx, d)
+                        editingTileId = null
+                        showSettingsScreen = false
+                    },
+                    onClose = { showSettingsScreen = false }
+                )
+            } else {
+                HorizontalPager(
+                    state = pager,
+                    userScrollEnabled = editingTileId == null,
+                    modifier = Modifier.fillMaxSize()
+                ) { page ->
+                    if (page == 0) {
+                        StartScreen(
+                            tiles = tiles,
+                            gridCols = gridCols,
+                            accent = accent,
+                            fgColor = fgColor,
+                            galleryPhotos = galleryPhotos,
+                            editingTileId = editingTileId,
+                            onSelectEditTile = { editingTileId = it },
+                            onExitEditMode = { editingTileId = null },
+                            onReorderTiles = { newList ->
+                                tiles = newList
+                                Storage.saveTiles(ctx, newList)
+                            },
+                            onCycleSize = { id ->
+                                val updated = tiles.map { t ->
+                                    if (t.id == id) {
+                                        val next = when (t.size) {
+                                            TileSize.SMALL -> TileSize.MEDIUM
+                                            TileSize.MEDIUM -> TileSize.WIDE
+                                            TileSize.WIDE -> TileSize.SMALL
+                                        }
+                                        t.copy(size = next)
+                                    } else t
                                 }
-                                launchTile(ctx, t)
-                            }
-                        },
-                        onAllApps = { scope.launch { pager.animateScrollToPage(1) } }
-                    )
-                } else {
-                    AllAppsScreen(
-                        apps = apps,
-                        accent = accent,
-                        bgColor = bgColor,
-                        fgColor = fgColor,
-                        onClick = { app -> ctx.packageManager.getLaunchIntentForPackage(app.packageName)?.let { ctx.startActivity(it) } },
-                        onPin = { app ->
-                            val isGal = app.packageName.contains("gallery", true) ||
-                                app.packageName.contains("photos", true) ||
-                                app.label.contains("галерея", true) ||
-                                app.label.contains("фото", true)
-                            val updated = tiles + TileItem(
-                                id = "app_${System.currentTimeMillis()}",
-                                title = app.label,
-                                size = TileSize.MEDIUM,
-                                packageName = app.packageName,
-                                specialType = if (isGal) TileSpecialType.GALLERY_LIVE else TileSpecialType.NONE
-                            )
-                            tiles = updated
-                            Storage.saveTiles(ctx, updated)
-                            scope.launch { pager.animateScrollToPage(0) }
-                        },
-                        onSettings = { showSettingsScreen = true }
-                    )
+                                tiles = updated
+                                Storage.saveTiles(ctx, updated)
+                            },
+                            onUnpin = { id ->
+                                val updated = tiles.filterNot { it.id == id }
+                                tiles = updated
+                                Storage.saveTiles(ctx, updated)
+                                if (editingTileId == id) editingTileId = null
+                            },
+                            onClick = { t ->
+                                if (t.specialType == TileSpecialType.LAUNCHER_SETTINGS) {
+                                    showSettingsScreen = true
+                                } else {
+                                    if (isGalleryTile(t) && !hasMediaPerm) {
+                                        permLauncher.launch(mediaPerm)
+                                    }
+                                    launchTile(ctx, t)
+                                }
+                            },
+                            onAllApps = { scope.launch { pager.animateScrollToPage(1) } }
+                        )
+                    } else {
+                        AllAppsScreen(
+                            apps = apps,
+                            accent = accent,
+                            bgColor = bgColor,
+                            fgColor = fgColor,
+                            onClick = { app -> ctx.packageManager.getLaunchIntentForPackage(app.packageName)?.let { ctx.startActivity(it) } },
+                            onPin = { app ->
+                                val isGal = app.packageName.contains("gallery", true) ||
+                                    app.packageName.contains("photos", true) ||
+                                    app.label.contains("галерея", true) ||
+                                    app.label.contains("фото", true)
+                                val updated = tiles + TileItem(
+                                    id = "app_${System.currentTimeMillis()}",
+                                    title = app.label,
+                                    size = TileSize.MEDIUM,
+                                    packageName = app.packageName,
+                                    specialType = if (isGal) TileSpecialType.GALLERY_LIVE else TileSpecialType.NONE
+                                )
+                                tiles = updated
+                                Storage.saveTiles(ctx, updated)
+                                scope.launch { pager.animateScrollToPage(0) }
+                            },
+                            onSettings = { showSettingsScreen = true }
+                        )
+                    }
                 }
             }
         }
@@ -452,7 +443,7 @@ suspend fun loadRecentPhotos(ctx: Context, limit: Int): List<ImageBitmap> = with
 }
 
 @Composable
-fun WpStatusBar(fgColor: Color, accentColor: Color, bgColor: Color, onSwipeDown: () -> Unit) {
+fun WpStatusBar(fgColor: Color, accentColor: Color, bgColor: Color) {
     val ctx = LocalContext.current
     var timeText by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(100) }
@@ -491,22 +482,8 @@ fun WpStatusBar(fgColor: Color, accentColor: Color, bgColor: Color, onSwipeDown:
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .zIndex(20f)
             .background(bgColor)
             .height(28.dp)
-            .pointerInput(Unit) {
-                var totalDy = 0f
-                detectVerticalDragGestures(
-                    onDragStart = { totalDy = 0f },
-                    onVerticalDrag = { _, dragAmount ->
-                        totalDy += dragAmount
-                        if (totalDy > 30f) {
-                            totalDy = -999f
-                            onSwipeDown()
-                        }
-                    }
-                )
-            }
             .padding(horizontal = 8.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -681,7 +658,6 @@ fun StartScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .clipToBounds()
             .clickable(
                 enabled = editingTileId != null,
                 indication = null,
@@ -1162,7 +1138,6 @@ fun AllAppsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(bgColor)
-            .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         LazyColumn(
@@ -1170,7 +1145,7 @@ fun AllAppsScreen(
                 .weight(1f)
                 .clipToBounds(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp)
+            contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp)
         ) {
             items(list, key = { it.packageName }) { app ->
                 Row(
