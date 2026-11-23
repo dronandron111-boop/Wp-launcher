@@ -53,6 +53,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -287,6 +288,7 @@ fun WpApp() {
         WpStatusBar(
             fgColor = fgColor,
             accentColor = accent,
+            bgColor = bgColor,
             onSwipeDown = { expandNotificationShade(ctx) }
         )
 
@@ -450,7 +452,7 @@ suspend fun loadRecentPhotos(ctx: Context, limit: Int): List<ImageBitmap> = with
 }
 
 @Composable
-fun WpStatusBar(fgColor: Color, accentColor: Color, onSwipeDown: () -> Unit) {
+fun WpStatusBar(fgColor: Color, accentColor: Color, bgColor: Color, onSwipeDown: () -> Unit) {
     val ctx = LocalContext.current
     var timeText by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(100) }
@@ -489,6 +491,8 @@ fun WpStatusBar(fgColor: Color, accentColor: Color, onSwipeDown: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .zIndex(20f)
+            .background(bgColor)
             .height(28.dp)
             .pointerInput(Unit) {
                 var totalDy = 0f
@@ -677,6 +681,7 @@ fun StartScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .clipToBounds()
             .clickable(
                 enabled = editingTileId != null,
                 indication = null,
@@ -1157,13 +1162,15 @@ fun AllAppsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(bgColor)
-            .imePadding()
+            .statusBarsPadding()
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         LazyColumn(
-            modifier = Modifier.weight(1f),
+            modifier = Modifier
+                .weight(1f)
+                .clipToBounds(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp)
+            contentPadding = PaddingValues(top = 8.dp, bottom = 12.dp)
         ) {
             items(list, key = { it.packageName }) { app ->
                 Row(
