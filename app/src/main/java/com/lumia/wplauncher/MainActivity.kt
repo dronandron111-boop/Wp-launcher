@@ -30,9 +30,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,15 +53,13 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
@@ -89,7 +90,6 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle as JavaTextStyle
 import java.util.Locale
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 enum class TileSize(val cols: Int, val rows: Int) { SMALL(1, 1), MEDIUM(2, 2), WIDE(4, 2) }
@@ -641,28 +641,39 @@ fun StartScreen(
 
     var draggingId by remember { mutableStateOf<String?>(null) }
     var dragFingerPos by remember { mutableStateOf(Offset.Zero) }
+    var dragDelta by remember { mutableStateOf(Offset.Zero) }
 
     LaunchedEffect(editingTileId) {
-        draggingId = null
-        dragFingerPos = Offset.Zero
+        if (editingTileId == null) {
+            draggingId = null
+            dragFingerPos = Offset.Zero
+            dragDelta = Offset.Zero
+        }
     }
-
-    val infiniteTransition = rememberInfiniteTransition(label = "jiggleTransition")
-    val jiggleAngle by infiniteTransition.animateFloat(
-        initialValue = -1.6f,
-        targetValue = 1.6f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 125, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "jiggleAngle"
-    )
 
     val latestPlaced by rememberUpdatedState(placed)
     val latestTiles by rememberUpdatedState(tiles)
     val latestOnReorder by rememberUpdatedState(onReorderTiles)
+    val latestOnSelectEdit by rememberUpdatedState(onSelectEditTile)
 
     val cellStepPx = with(density) { (cell + gap).toPx() }
+    val screenWpx = with(density) { gridW.toPx() }.coerceAtLeast(1f)
+    val screenHpx = with(density) { gridH.toPx() }.coerceAtLeast(1f)
+
+    // 3D parallax tilt angles driven smoothly by finger drag movement
+    val targetTiltY = if (draggingId != null) ((dragDelta.x / screenWpx) * 26f).coerceIn(-14f, 14f) else 0f
+    val targetTiltX = if (draggingId != null) ((-dragDelta.y / screenHpx) * 26f).coerceIn(-14f, 14f) else 0f
+
+    val parallaxTiltY by animateFloatAsState(
+        targetValue = targetTiltY,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "parallaxY"
+    )
+    val parallaxTiltX by animateFloatAsState(
+        targetValue = targetTiltX,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "parallaxX"
+    )
 
     Column(
         modifier = Modifier
@@ -673,6 +684,7 @@ fun StartScreen(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             ) {
                 draggingId = null
+                dragDelta = Offset.Zero
                 onExitEditMode()
             }
             .verticalScroll(scrollState, enabled = draggingId == null)
@@ -687,11 +699,8 @@ fun StartScreen(
             placed.forEach { p ->
                 key(p.tile.id) {
                     val isEditingThis = editingTileId == p.tile.id
-                    val isDraggingThis = draggingId == p.tile.id && isEditingThis
-                    val isJiggling = editingTileId != null && !isDraggingThis
-
-                    val phaseSign = if (abs(p.tile.id.hashCode()) % 2 == 0) 1f else -1f
-                    val rotation = if (isJiggling) jiggleAngle * phaseSign else 0f
+                    val isDraggingThis = draggingId == p.tile.id
+                    val isBackgroundTile = editingTileId != null && !isDraggingThis
 
                     val wCols = p.tile.size.cols.coerceAtMost(gridCols)
                     val w = cell * wCols + gap * (wCols - 1)
@@ -700,94 +709,115 @@ fun StartScreen(
                     val baseX = with(density) { ((cell + gap) * p.col).toPx() }
                     val baseY = with(density) { ((cell + gap) * p.row).toPx() }
 
-                    val currentOffsetX = if (isDraggingThis) dragFingerPos.x else baseX
-                    val currentOffsetY = if (isDraggingThis) dragFingerPos.y else baseY
+                    // Subtle depth parallax shift for surrounding tiles
+                    val parallaxShiftX = if (isBackgroundTile && draggingId != null) -parallaxTiltY * 1.1f else 0f
+                    val parallaxShiftY = if (isBackgroundTile && draggingId != null) parallaxTiltX * 1.1f else 0f
+
+                    val currentOffsetX = if (isDraggingThis) dragFingerPos.x else baseX + parallaxShiftX
+                    val currentOffsetY = if (isDraggingThis) dragFingerPos.y else baseY + parallaxShiftY
 
                     val scale by animateFloatAsState(
                         targetValue = when {
-                            isDraggingThis -> 1.07f
-                            isEditingThis -> 1.02f
-                            editingTileId != null -> 0.96f
+                            isDraggingThis -> 1.08f
+                            isEditingThis -> 1.03f
+                            editingTileId != null -> 0.93f
                             else -> 1f
                         },
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
                         label = "tileScale"
+                    )
+
+                    val tileAlpha by animateFloatAsState(
+                        targetValue = when {
+                            isDraggingThis || isEditingThis -> 1f
+                            editingTileId != null -> 0.58f
+                            else -> 1f
+                        },
+                        label = "tileAlpha"
                     )
 
                     Box(
                         modifier = Modifier
                             .zIndex(if (isDraggingThis) 10f else if (isEditingThis) 5f else 1f)
                             .offset { IntOffset(currentOffsetX.roundToInt(), currentOffsetY.roundToInt()) }
-                            .scale(scale)
-                            .rotate(rotation)
+                            .graphicsLayer {
+                                scaleX = scale
+                                scaleY = scale
+                                alpha = tileAlpha
+                                if (isBackgroundTile) {
+                                    rotationX = parallaxTiltX
+                                    rotationY = parallaxTiltY
+                                    cameraDistance = 14f * density.density
+                                }
+                            }
                             .width(w)
                             .height(h)
-                            .alpha(if (editingTileId != null && !isEditingThis) 0.72f else 1f)
                             .background(accent)
                             .then(
                                 if (isEditingThis) Modifier.border(2.dp, fgColor) else Modifier
                             )
-                            .pointerInput(p.tile.id, isEditingThis) {
-                                if (isEditingThis) {
-                                    detectDragGestures(
-                                        onDragStart = {
-                                            val startPlaced = latestPlaced.firstOrNull { it.tile.id == p.tile.id }
-                                            val sx = ((startPlaced?.col ?: p.col) * cellStepPx)
-                                            val sy = ((startPlaced?.row ?: p.row) * cellStepPx)
-                                            draggingId = p.tile.id
-                                            dragFingerPos = Offset(sx, sy)
-                                        },
-                                        onDrag = { change, dragAmount ->
-                                            change.consume()
-                                            dragFingerPos += dragAmount
+                            // Grab and immediately drag in a single long-press gesture!
+                            .pointerInput(p.tile.id) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        latestOnSelectEdit(p.tile.id)
+                                        val startPlaced = latestPlaced.firstOrNull { it.tile.id == p.tile.id }
+                                        val sx = ((startPlaced?.col ?: p.col) * cellStepPx)
+                                        val sy = ((startPlaced?.row ?: p.row) * cellStepPx)
+                                        draggingId = p.tile.id
+                                        dragFingerPos = Offset(sx, sy)
+                                        dragDelta = Offset.Zero
+                                    },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        dragFingerPos += dragAmount
+                                        dragDelta += dragAmount
 
-                                            val targetCol = (dragFingerPos.x / cellStepPx).roundToInt().coerceIn(0, gridCols - 1)
-                                            val targetRow = (dragFingerPos.y / cellStepPx).roundToInt().coerceAtLeast(0)
+                                        val targetCol = (dragFingerPos.x / cellStepPx).roundToInt().coerceIn(0, gridCols - 1)
+                                        val targetRow = (dragFingerPos.y / cellStepPx).roundToInt().coerceAtLeast(0)
 
-                                            val targetPlaced = latestPlaced.firstOrNull { cand ->
-                                                cand.tile.id != p.tile.id &&
-                                                    targetRow in cand.row until (cand.row + cand.tile.size.rows) &&
-                                                    targetCol in cand.col until (cand.col + cand.tile.size.cols.coerceAtMost(gridCols))
-                                            }
-
-                                            if (targetPlaced != null) {
-                                                val currentList = latestTiles
-                                                val fromIdx = currentList.indexOfFirst { it.id == p.tile.id }
-                                                val toIdx = currentList.indexOfFirst { it.id == targetPlaced.tile.id }
-                                                if (fromIdx != -1 && toIdx != -1 && fromIdx != toIdx) {
-                                                    val mutable = currentList.toMutableList()
-                                                    val moved = mutable.removeAt(fromIdx)
-                                                    mutable.add(toIdx, moved)
-                                                    latestOnReorder(mutable)
-                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                }
-                                            }
-                                        },
-                                        onDragEnd = {
-                                            draggingId = null
-                                            dragFingerPos = Offset.Zero
-                                        },
-                                        onDragCancel = {
-                                            draggingId = null
-                                            dragFingerPos = Offset.Zero
+                                        val targetPlaced = latestPlaced.firstOrNull { cand ->
+                                            cand.tile.id != p.tile.id &&
+                                                targetRow in cand.row until (cand.row + cand.tile.size.rows) &&
+                                                targetCol in cand.col until (cand.col + cand.tile.size.cols.coerceAtMost(gridCols))
                                         }
-                                    )
+
+                                        if (targetPlaced != null) {
+                                            val currentList = latestTiles
+                                            val fromIdx = currentList.indexOfFirst { it.id == p.tile.id }
+                                            val toIdx = currentList.indexOfFirst { it.id == targetPlaced.tile.id }
+                                            if (fromIdx != -1 && toIdx != -1 && fromIdx != toIdx) {
+                                                val mutable = currentList.toMutableList()
+                                                val moved = mutable.removeAt(fromIdx)
+                                                mutable.add(toIdx, moved)
+                                                latestOnReorder(mutable)
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            }
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        draggingId = null
+                                        dragFingerPos = Offset.Zero
+                                        dragDelta = Offset.Zero
+                                    },
+                                    onDragCancel = {
+                                        draggingId = null
+                                        dragFingerPos = Offset.Zero
+                                        dragDelta = Offset.Zero
+                                    }
+                                )
+                            }
+                            .clickable {
+                                if (editingTileId != null) {
+                                    draggingId = null
+                                    dragDelta = Offset.Zero
+                                    if (editingTileId != p.tile.id) onSelectEditTile(p.tile.id)
+                                    else onExitEditMode()
+                                } else {
+                                    onClick(p.tile)
                                 }
                             }
-                            .combinedClickable(
-                                onClick = {
-                                    if (editingTileId != null) {
-                                        draggingId = null
-                                        if (editingTileId != p.tile.id) onSelectEditTile(p.tile.id)
-                                        else onExitEditMode()
-                                    } else {
-                                        onClick(p.tile)
-                                    }
-                                },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onSelectEditTile(p.tile.id)
-                                }
-                            )
                     ) {
                         when {
                             p.tile.specialType == TileSpecialType.PEOPLE_LIVE -> PeopleTile(p.tile.title, accent)
@@ -840,7 +870,7 @@ fun StartScreen(
                             }
                         }
 
-                        if (isEditingThis) {
+                        if (isEditingThis && !isDraggingThis) {
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.TopEnd)
@@ -887,6 +917,7 @@ fun StartScreen(
                 )
                 TextButton(onClick = {
                     draggingId = null
+                    dragDelta = Offset.Zero
                     onExitEditMode()
                 }) {
                     Text("Готово", color = accent, fontWeight = FontWeight.Bold)
