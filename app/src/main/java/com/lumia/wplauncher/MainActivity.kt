@@ -660,7 +660,6 @@ fun StartScreen(
     val screenWpx = with(density) { gridW.toPx() }.coerceAtLeast(1f)
     val screenHpx = with(density) { gridH.toPx() }.coerceAtLeast(1f)
 
-    // 3D parallax tilt angles driven smoothly by finger drag movement
     val targetTiltY = if (draggingId != null) ((dragDelta.x / screenWpx) * 26f).coerceIn(-14f, 14f) else 0f
     val targetTiltX = if (draggingId != null) ((-dragDelta.y / screenHpx) * 26f).coerceIn(-14f, 14f) else 0f
 
@@ -709,7 +708,6 @@ fun StartScreen(
                     val baseX = with(density) { ((cell + gap) * p.col).toPx() }
                     val baseY = with(density) { ((cell + gap) * p.row).toPx() }
 
-                    // Subtle depth parallax shift for surrounding tiles
                     val parallaxShiftX = if (isBackgroundTile && draggingId != null) -parallaxTiltY * 1.1f else 0f
                     val parallaxShiftY = if (isBackgroundTile && draggingId != null) parallaxTiltX * 1.1f else 0f
 
@@ -756,7 +754,6 @@ fun StartScreen(
                             .then(
                                 if (isEditingThis) Modifier.border(2.dp, fgColor) else Modifier
                             )
-                            // Grab and immediately drag in a single long-press gesture!
                             .pointerInput(p.tile.id) {
                                 detectDragGesturesAfterLongPress(
                                     onDragStart = {
@@ -1156,14 +1153,52 @@ fun AllAppsScreen(
 ) {
     var q by remember { mutableStateOf("") }
     val list = remember(apps, q) { if (q.isBlank()) apps else apps.filter { it.label.contains(q, true) } }
-    Column(Modifier.fillMaxSize().background(bgColor).padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(bgColor)
+            .imePadding()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(top = 6.dp, bottom = 12.dp)
+        ) {
+            items(list, key = { it.packageName }) { app ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .combinedClickable(onClick = { onClick(app) }, onLongClick = { onPin(app) })
+                        .padding(vertical = 3.dp)
+                ) {
+                    val bmp = remember(app.packageName) {
+                        app.icon?.let { d ->
+                            val b = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
+                            val c = Canvas(b); d.setBounds(0, 0, 128, 128); d.draw(c); b.asImageBitmap()
+                        }
+                    }
+                    if (bmp != null) {
+                        Image(bmp, null, Modifier.size(42.dp))
+                    } else {
+                        Icon(Icons.Default.Apps, null, tint = fgColor, modifier = Modifier.size(42.dp))
+                    }
+                    Spacer(Modifier.width(16.dp))
+                    Text(app.label, color = fgColor, fontSize = 19.sp, fontWeight = FontWeight.Light, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Box(
                 Modifier
                     .weight(1f)
-                    .height(42.dp)
+                    .height(44.dp)
                     .background(if (bgColor == Color.Black) Color.White else Color(0xFFEDEDED))
-                    .padding(horizontal = 12.dp),
+                    .padding(horizontal = 14.dp),
                 contentAlignment = Alignment.CenterStart
             ) {
                 if (q.isEmpty()) Text("поиск...", color = Color.Gray, fontSize = 16.sp)
@@ -1177,32 +1212,8 @@ fun AllAppsScreen(
                 )
             }
             Spacer(Modifier.width(10.dp))
-            Box(Modifier.size(42.dp).background(accent).clickable { onSettings() }, contentAlignment = Alignment.Center) {
+            Box(Modifier.size(44.dp).background(accent).clickable { onSettings() }, contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.Settings, null, tint = Color.White)
-            }
-        }
-        LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(list, key = { it.packageName }) { app ->
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(onClick = { onClick(app) }, onLongClick = { onPin(app) })
-                        .padding(vertical = 4.dp)
-                ) {
-                    Box(Modifier.size(44.dp).background(accent), contentAlignment = Alignment.Center) {
-                        val bmp = remember(app.packageName) {
-                            app.icon?.let { d ->
-                                val b = Bitmap.createBitmap(80, 80, Bitmap.Config.ARGB_8888)
-                                val c = Canvas(b); d.setBounds(0, 0, 80, 80); d.draw(c); b.asImageBitmap()
-                            }
-                        }
-                        if (bmp != null) Image(bmp, null, Modifier.size(30.dp))
-                        else Icon(Icons.Default.Apps, null, tint = Color.White)
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Text(app.label, color = fgColor, fontSize = 19.sp, fontWeight = FontWeight.Light, maxLines = 1)
-                }
             }
         }
     }
